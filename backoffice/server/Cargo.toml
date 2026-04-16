@@ -1,0 +1,22 @@
+[package]
+name = "tangleweavestudios-backoffice-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tangleweavestudios-models = { path = "../../shared/models" }
+tangleweavestudios-protocol = { path = "../../shared/protocol" }
+tangleweavestudios-utils = { path = "../../shared/utils" }
+
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dotenvy = { workspace = true }

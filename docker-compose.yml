@@ -1,0 +1,54 @@
+services:
+  # Наше Rust приложение
+  backoffice-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgres://user:pass@db:5432/backoffice_db
+      - RUST_LOG=debug
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # База данных PostgreSQL
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=pass
+      - POSTGRES_DB=backoffice_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d backoffice_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  mailcrab:
+    image: marlonb/mailcrab:latest
+    ports:
+      - "8081:8081"
+
+  rauthy:
+    image: ghcr.io/sebadob/rauthy:0.34.3
+    environment:
+      - LOCAL_TEST=true
+      - SMTP_URL=mailcrab
+      - SMTP_PORT=1025
+      - SMTP_DANGER_INSECURE=true
+    volumes:
+      - rauth_data:/app/data
+    ports:
+      - "8443:8443"
+    depends_on:
+      - mailcrab
+
+volumes:
+  postgres_data:
+  rauth_data:

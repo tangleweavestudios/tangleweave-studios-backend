@@ -1,0 +1,19 @@
+[package]
+name = "tangleweavestudios-utils"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "tangleweavestudios_utils"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+argon2 = "0.5"
+axum = { workspace = true }
+serde_json = { workspace = true }
+tangleweavestudios-models = { path = "../models" }

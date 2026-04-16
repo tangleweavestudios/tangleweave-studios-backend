@@ -1,0 +1,15 @@
+[package]
+name = "tangleweavestudios-models"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "tangleweavestudios_models"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }

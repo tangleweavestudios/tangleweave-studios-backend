@@ -1,0 +1,4 @@
+target/
+backoffice/frontend/node_modules/
+backoffice/frontend/dist/
+data/
