@@ -1,0 +1,17 @@
+name: tangleweave
+
+socket:
+  port: 7350
+
+grpc:
+  port: 7351
+  host: "0.0.0.0"
+
+console:
+  port: 7353
+
+session:
+  token_expiry_sec: 3600
+
+runtime:
+  js_entrypoint: "auth_rauthy.js"

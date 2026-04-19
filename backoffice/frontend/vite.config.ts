@@ -15,7 +15,22 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000,
-    open: true
-  }
-})
+    port: 80,
+    host: true,
+    proxy: {
+      '/.well-known/openid-configuration': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+        rewrite: (path: string) => path.replace('/.well-known/openid-configuration', '/auth/.well-known/openid-configuration'),
+      },
+      '/auth': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+    },
+  },
+});

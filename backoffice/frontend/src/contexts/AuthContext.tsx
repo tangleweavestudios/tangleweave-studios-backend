@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import { UserManager, WebStorageStateStore } from 'oidc-client-ts';
 
 interface User {
   id: string;
@@ -26,6 +27,15 @@ const MOCK_USER: User = {
 };
 
 const MOCK_TOKEN = 'mock-jwt-token-12345';
+
+export const userManager = new UserManager({
+  authority: import.meta.env.VITE_OIDC_AUTHORITY || 'http://localhost:8443',
+  client_id: import.meta.env.VITE_OIDC_CLIENT_ID || 'backoffice-frontend',
+  redirect_uri: import.meta.env.VITE_OIDC_REDIRECT_URI || 'http://localhost/callback',
+  response_type: 'code',
+  scope: 'openid profile email',
+  userStore: new WebStorageStateStore({ store: window.sessionStorage }),
+});
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);

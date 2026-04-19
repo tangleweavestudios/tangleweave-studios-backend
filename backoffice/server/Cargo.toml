@@ -20,3 +20,16 @@ sqlx = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 dotenvy = { workspace = true }
+
+jsonwebtoken = "10"
+reqwest = { workspace = true }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+hex = "0.4"
+hmac = "0.12"
+sha2 = "0.10"
+urlencoding = "2"
+
+[dev-dependencies]
+tokio-test = "0.4"

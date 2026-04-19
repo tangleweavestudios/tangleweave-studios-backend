@@ -1,253 +1,343 @@
-# TangleWeaveStudios - Описание проекта
+# TangleWeave Studios Backend — Техническая документация
 
-## Обзор
+## 1. Общее описание
 
-**TangleWeaveStudios** — это полнофункциональное веб-приложение с архитектурой микросервисов, построенное на Rust (бэкенд) и React (фронтенд). Проект включает систему администрирования (backoffice) с аутентификацией через OIDC (Rauthy) и маршрутизацией через Sōzu.
+Единая серверная инфраструктура (Backend Monorepo) для поддержки мультиплатформенной головоломки **«Unwind: The Magic Atlas»** и последующих проектов студии **TangleWeave Studios**.
 
-## Архитектура
+### Бизнес-цели
+- Независимая, масштабируемая система
+- Единая точка авторизации (SSO)
+- Server-authoritative игровая логика
+- Легковесная аналитика без клиентских SDK
+- Надёжный микросервис для бэк-офиса
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Sōzu (Reverse Proxy)                     │
-│                    http://localhost:80                          │
-└────────────────────┬────────────────────┬───────────────────────┘
-                     │                    │                      │
-              /api/*               /auth/*              /*
-             │                    │                    │
-    ┌────────▼────────┐    ┌──────▼──────┐    ┌───────▼───────┐
-    │  Backoffice    │    │   Rauthy    │    │   Frontend    │
-    │  Server (Rust) │    │  (OIDC)     │    │  (React/Vite) │
-    │   :3000        │    │   :8443     │    │    :3000      │
-    └───────┬────────┘    └─────────────┘    └───────────────┘
-            │
-            │         PostgreSQL (:5432)
-            ▼
-```
-
-## Структура проекта
+## 2. Архитектура
 
 ```
-tangleweavestudios/
-├── app/                      # Основное приложение (заготовка)
-│   ├── client/               # Клиент app (заготовка)
-│   └── server/               # Сервер app (заготовка)
-│
-├── backoffice/               # Админ-панель
-│   ├── client/               # Клиентская библиотека (Rust)
-│   ├── server/               # API сервер (Rust/Axum)
-│   │   ├── src/
-│   │   │   ├── main.rs       # Точка входа, роутинг
-│   │   │   ├── handlers.rs   # HTTP обработчики
-│   │   │   ├── auth.rs       # OIDC/JWT аутентификация
-│   │   │   └── models.rs     # Модели данных
-│   │   └── migrations/       # Миграции БД
-│   │
-│   └── frontend/             # React SPA
-│       ├── src/
-│       │   ├── api/          # OpenAPI сгенерированные модели
-│       │   ├── components/  # React компоненты
-│       │   ├── contexts/     # React Context (Auth)
-│       │   ├── pages/        # Страницы
-│       │   ├── routes/      # Защищённые маршруты
-│       │   └── App.tsx      # Главный компонент
-│       ├── package.json     # Vite + React + MUI
-│       ├── vite.config.ts   # Конфигурация Vite
-│       └── Dockerfile       # Multi-stage сборка
-│
-├── shared/                  # Общие библиотеки
-│   ├── models/              # Общие модели данных
-│   ├── protocol/            # Протоколы/интерфейсы
-│   └── utils/               # Утилиты
-│
-├── infrastructure/           # Docker-инфраструктура
-│   ├── docker-compose.yml   # Все сервисы
-│   ├── Dockerfile           # Сборка Rust сервера
-│   └── sozu/                # Конфигурация Sōzu
-│       └── sozu.toml        # Правила маршрутизации
-│
-├── Cargo.toml               # Workspace конфигурация
-├── Cargo.lock               # Зависимости Rust
-├── Dockerfile               # Multi-stage сборка Rust
-└── readme.md               # Пароли (удалить!)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              Docker Network                                  │
+│                           (internal_network)                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   ┌──────────┐     ┌──────────┐     ┌───────────┐     ┌──────────────────┐  │
+│   │ Rauthy  │────▶│  Nakama  │────▶│ PostgreSQL│     │    Aptabase     │  │
+│   │ (OIDC)  │     │  (Game)  │     │  Cluster  │     │  (Analytics)    │  │
+│   │  :8443   │     │  :7350   │     │   :5432   │     │     :3000        │  │
+│   └────┬─────┘     └────┬─────┘     └─────┬─────┘     └────────┬─────────┘  │
+│        │                │                 │                    │            │
+│        │                │                 │                    │            │
+│        │         ┌──────▼──────┐          │                    │            │
+│        │         │ Backoffice  │◀─────────┘                    │            │
+│        │         │    API       │                              │            │
+│        │         │   (Rust)     │◀─────────────────────────────┘            │
+│        │         │    :8080     │                                              │
+│        │         └──────────────┘                                              │
+│        │                                                                      │
+│   ┌────▼────────────────┐                                                     │
+│   │   Nginx / Proxy      │                                                     │
+│   │   (Port 80/443)      │                                                     │
+│   └─────────────────────┘                                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Технологический стек
+### Внешние порты (пробрасываются на host)
 
-### Backend (Rust)
+| Сервис | Порт | Описание |
+|--------|------|----------|
+| Nginx | 80, 443 | Обратный прокси |
+| Nakama | 7350 | Игровой клиентский API |
+| Rauthy | 8443 | UI администрирования |
+| Aptabase | 3000 | UI аналитики |
+| Backoffice API | 8080 | Админ-панель API |
+| Mailcrab | 1080 | SMTP для Rauthy (dev) |
 
-| Компонент | Версия | Назначение |
-|-----------|--------|------------|
-| tokio | 1.49.0 | Асинхронная.runtime |
-| axum | 0.8.8 | Веб-фреймворк |
-| sqlx | 0.8.6 | Работа с PostgreSQL |
-| jsonwebtoken | 10.3.0 | JWT валидация |
-| tower-http | 0.6.8 | HTTP middleware |
+## 3. Структура репозитория
 
-### Frontend (React)
+```
+tangleweave-backend/
+├── docker-compose.yml           # Главный файл оркестрации
+├── .env                         # Секреты (не коммитится!)
+│
+├── configs/                     # Конфигурации сервисов
+│   └── init.sql                 # Инициализация БД
+│
+├── nakama/                      # Игровой сервер
+│   ├── data/                    # Конфиги Nakama
+│   │   ├── local.yml           # Локальная конфигурация
+│   │   └── rauthy.yml          # OIDC провайдер
+│   └── modules/                 # Игровые модули (TypeScript/Lua/Go)
+│       ├── analytics.ts        # Отправка событий в Aptabase
+│       ├── progress.ts         # Синхронизация прогресса
+│       └── rewards.ts          # Система наград
+│
+├── backoffice-api/              # Микросервис Rust
+│   ├── src/
+│   │   ├── main.rs             # Точка входа
+│   │   ├── routes/             # Axum роуты
+│   │   ├── middleware/         # JWT валидация
+│   │   ├── models/             # Модели данных
+│   │   └── services/           # Бизнес-логика
+│   ├── Cargo.toml
+│   └── Dockerfile
+│
+├── backoffice/                  # Фронтенд админ-панели (существующий)
+│   ├── server/                  # Rust API сервер
+│   └── frontend/                # React SPA
+│
+└── docs/                        # Документация
+    ├── api/                     # OpenAPI схемы
+    └── architecture/           # Схемы архитектуры
+```
 
-| Компонент | Версия | Назначение |
-|-----------|--------|------------|
-| react | 18.2.0 | UI фреймворк |
-| vite | 7.3.1 | Сборщик |
-| @mui/material | 5.15.6 | UI компоненты |
-| oidc-client-ts | 3.0.1 | OIDC клиент |
-| axios | 1.6.7 | HTTP клиент |
+## 4. Компоненты
 
-### Инфраструктура
+### 4.1 База данных (PostgreSQL)
 
-| Сервис | Версия | Назначение |
-|--------|--------|------------|
-| Sōzu | latest | Обратный прокси |
-| PostgreSQL | 15-alpine | База данных |
-| Rauthy | 0.34.3 | OIDC провайдер |
-| Node.js | 20 | Сборка фронтенда |
+**Единый кластер с изолированными базами данных:**
 
-## Компоненты
+| База данных | Назначение |
+|-------------|------------|
+| `rauthy_db` | Данные OIDC провайдера |
+| `nakama_db` | Данные игрового сервера |
+| `aptabase_db` | Аналитические события |
+| `backoffice_db` | Бизнес-данные бэк-офиса |
 
-### 1. Backoffice Server (Rust)
+**Init SQL (`configs/init.sql`):**
+```sql
+CREATE DATABASE rauthy_db;
+CREATE DATABASE nakama_db;
+CREATE DATABASE aptabase_db;
+CREATE DATABASE backoffice_db;
+```
+
+**Требования:**
+- Контейнеры общаются с БД по внутренней сети `internal`
+- Доступ с host защищён строгим паролем из `.env`
+- Healthcheck через `pg_isready`
+
+### 4.2 Система авторизации (Rauthy)
 
 **Функции:**
-- REST API для управления пользователями
-- JWT аутентификация через Rauthy
-- PostgreSQL для хранения данных
+- SSO для игроков (OIDC-клиент для «Unwind: The Magic Atlas»)
+- SSO для админов (отдельный клиент с ролями: admin, support)
+- Выдача JWT-токенов
+
+#### Bootstrapping (автонастройка)
+
+Rauthy поддерживает мощный механизм **Bootstrapping** — при первом запуске с чистой БД автоматически создаёт админа и API-ключ.
+
+**Что создаётся автоматически:**
+- Админ-пользователь: `admin@localhost.de`
+- API-ключ: `bootstrap` (с правами на Clients и Roles)
+
+**Настройка в `.env`:**
+```bash
+BOOTSTRAP_ADMIN_PASSWORD_PLAIN=MySuperSafePassword123!
+BOOTSTRAP_API_KEY_SECRET=TwUA2M7RZ8H3FyJHbti2AcMADPDCxDqUKbvi8FDnm3nYidwQx57Wfv6iaVTQynMh
+BOOTSTRAP_API_KEY=eyJuYW1lIjoiYm9vdHN0cmFwIiwiYWNjZXNzIjpb...
+```
+
+**Инициализация OIDC-клиентов:**
+```bash
+# После первого запуска Rauthy:
+./scripts/init-sso.sh
+```
+
+Скрипт создаёт:
+| Клиент | Тип | Назначение |
+|--------|-----|------------|
+| unwind-game | SPA (Public) | Игроки Godot |
+| backoffice-admin | SPA (Public) | Админ-панель |
+| backoffice-api | Public | Machine-to-machine API |
 
 **Эндпоинты:**
-- `POST /users` — создание пользователя
-- `GET /users` — получение списка пользователей
-- `GET /health` — проверка здоровья
-- `GET /auth/config` — OIDC конфигурация
+- OIDC Discovery: `/auth/v1/.well-known/openid-configuration`
+- JWKS: `/auth/v1/oidc/certs`
+- API: `/auth/v1`
 
-**Middleware:**
-- JWT валидация через `auth_middleware`
-- Извлечение claims из токена
-- Логирование запросов
+**Эндпоинты после настройки:**
+```
+Админ-панель: https://localhost:8443/admin
+SMTP: mailcrab (port 1025)
+```
 
-### 2. Backoffice Frontend (React)
+### 4.3 Игровой сервер (Nakama)
 
-**Страницы:**
-- `/login` — вход через OIDC
-- `/callback` — обработка callback от OIDC
-- `/users` — управление пользователями
-- `/products` — управление продуктами
-- `/orders` — управление заказами
+**Конфигурация:**
+- Отключена базовая email-аутентификация
+- Включена валидация JWT от Rauthy
+- gRPC для Server-to-Server коммуникации
 
-**Компоненты:**
-- `Layout` — основная структура с sidebar
-- `DataTable` — таблицы с данными
-- `EditForm` — формы редактирования
-- `ProtectedRoute` — защита маршрутов
+**RPC Функции:**
 
-**Аутентификация:**
-- OIDC Authorization Code Flow с PKCE
-- Хранение токенов в sessionStorage
-- Автоматическое обновление токенов
+| Функция | Описание |
+|---------|----------|
+| `sync_progress` | Синхронизация прогресса уровней |
+| `use_hint` | Запись использования подсказки |
+| `complete_level` | Завершение уровня |
+| `get_rewards` | Получение наград |
+| `claim_reward` | Запрос награды |
 
-### 3. Rauthy (OIDC Provider)
+**Интеграция с аналитикой:**
+```typescript
+// Пример отправки события в Aptabase
+nakama.rpc(ctx, "send_analytics", JSON.stringify({
+  event: "level_completed",
+  props: { level_id: 12, hints_used: 1, time_spent: 45 }
+}));
+```
 
-**Функции:**
-- Управление пользователями
-- Аутентификация через OAuth2/OIDC
-- Выдача JWT токенов
+### 4.4 Продуктовая аналитика (Aptabase)
 
-**Настройка:**
-- Админ: http://localhost/auth
-- SMTP: mailcrab (порт 8081)
-- Client: backoffice-frontend (SPA)
+**Режим:** Self-hosted с PostgreSQL
 
-### 4. Sōzu (Reverse Proxy)
+**Собираемые данные:**
+- Сессии (без идентификации пользователей)
+- Версии ОС и игры
+- Кастомные события из Nakama
 
-**Маршрутизация:**
-| Путь | Цель |
-|------|------|
-| `/` | Frontend (SPA) |
-| `/api/*` | Backoffice API |
-| `/auth/*` | Rauthy |
-| `/callback` | Frontend (OIDC) |
+**Пример события:**
+```json
+{
+  "eventName": "level_completed",
+  "props": {
+    "level_id": 12,
+    "hints_used": 1,
+    "time_spent": 45,
+    "difficulty": "hard"
+  }
+}
+```
 
-## Запуск
+### 4.5 Бэк-офис API (Rust / Axum)
+
+**Авторизация:** JWT от Rauthy с ролью `admin`
+
+**Эндпоинты:**
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| GET | `/api/users` | Список пользователей |
+| POST | `/api/users/:id/reward` | Выдать награду |
+| POST | `/api/users/:id/ban` | Заблокировать аккаунт |
+| GET | `/api/stats` | Статистика игроков |
+| POST | `/api/promocodes` | Создать промокод |
+| POST | `/api/webhooks/payment` | Платежный вебхук |
+
+**Server-to-Server:**
+- Выделенный API-ключ для связи с Nakama (gRPC/HTTP)
+- Управление балансом пользователей
+- Выдача наград
+
+## 5. Безопасность
+
+### Изоляция сети
+```
+┌─────────────────────────────────────────────────┐
+│              external (публичный)               │
+│  :80 Nginx  :7350 Nakama  :8443 Rauthy  :3000   │
+└─────────────────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────┐
+│              internal_network (Docker)          │
+│                                                 │
+│   PostgreSQL (:5432)  │  Aptabase (:5432)      │
+│   Nakama gRPC (:7351) │  Backoffice API (:8080)│
+└─────────────────────────────────────────────────┘
+```
+
+### Управление секретами
+
+Все пароли и ключи передаются через `.env`:
+```env
+# PostgreSQL
+POSTGRES_PASSWORD=secure_random_password
+
+# Rauthy
+RAUTHY_SECRET_KEY=...
+
+# Nakama
+NAKAMA_API_KEY=...
+
+# Backoffice
+BACKOFFICE_ADMIN_KEY=...
+```
+
+## 6. Запуск
 
 ### Требования
-- Docker
-- Docker Compose
+- Docker 20+
+- Docker Compose 2+
+- OpenSSL (для TLS сертификатов)
 
-### Сборка и запуск
+### Команда запуска
 
 ```bash
-cd infrastructure
-docker-compose up --build
+# 1. Генерация TLS сертификатов
+openssl req -x509 -newkey rsa:4096 \
+  -keyout key.pem -out cert.pem \
+  -sha256 -days 365 -nodes \
+  -subj "/CN=localhost"
+
+# 2. Запуск инфраструктуры
+docker-compose up -d
+
+# 3. Проверка статуса
+docker-compose ps
 ```
 
-### Доступ
+### Инициализация
 
-| Сервис | URL |
-|--------|-----|
-| Frontend | http://localhost |
-| API | http://localhost/api |
-| Rauthy | http://localhost/auth |
-| Mailcrab | http://localhost:8081 |
+1. **Rauthy:** Открыть http://localhost:8443, создать админ-аккаунт
+2. **Nakama:** Создать OIDC клиент в Rauthy, настроить `nakama/data/rauthy.yml`
+3. **Aptabase:** Открыть http://localhost:3000, настроить первый аккаунт
 
-## Настройка Rauthy
+## 7. Roadmap
 
-1. Открыть http://localhost/auth
-2. Создать админ-аккаунт (письмо придёт в mailcrab)
-3. Создать клиента:
-   - **Имя**: backoffice-frontend
-   - **Тип**: SPA (Public)
-   - **Redirect URIs**: http://localhost/callback
-   - **Flows**: Authorization Code
-   - **Token Endpoint Auth**: PKCE (S256)
+| Этап | Статус | Описание |
+|------|--------|----------|
+| 1. Инфраструктурный фундамент | 🔄 В работе | Docker Compose, PostgreSQL, init.sql |
+| 2. Auth-слой | 📋 Планируется | Rauthy, OIDC клиенты, валидация токенов |
+| 3. Аналитика | 📋 Планируется | Aptabase, RPC в Nakama |
+| 4. Бэк-офис | ✅ Существует | Rust/Axum API |
 
-## Переменные окружения
+## 8. Переменные окружения
 
-### Frontend (.env)
+```env
+# ===========================================
+# POSTGRESQL
+# ===========================================
+POSTGRES_USER=tangleweave
+POSTGRES_PASSWORD=change_me_in_production
+
+# ===========================================
+# RAUTHY (OIDC Provider)
+# ===========================================
+RAUTHY_DATA_PATH=/app/data
+LOCAL_TEST=true
+SMTP_URL=mailcrab
+SMTP_PORT=1025
+SMTP_DANGER_INSECURE=true
+
+# ===========================================
+# NAKAMA (Game Server)
+# ===========================================
+NAKAMA_API_KEY=change_me_in_production
+NAKAMA_LICENSE_KEY=your_nakama_license
+ODBC_DSN=postgresql://tangleweave:change_me@db:5432/nakama_db
+
+# ===========================================
+# APTABASE (Analytics)
+# ===========================================
+APABASE_DATABASE_URL=postgresql://tangleweave:change_me@db:5432/aptabase_db
+
+# ===========================================
+# BACKOFFICE API
+# ===========================================
+BACKOFFICE_DATABASE_URL=postgresql://tangleweave:change_me@db:5432/backoffice_db
+BACKOFFICE_ADMIN_KEY=change_me_in_production
+OIDC_ISSUER=https://tangleweave_rauthy:8443
+JWKS_URL=https://tangleweave_rauthy:8443/auth/v1/oidc/certs
+OIDC_CLIENT_ID=backoffice-api
 ```
-VITE_OIDC_AUTHORITY=http://localhost/auth
-VITE_OIDC_CLIENT_ID=backoffice-frontend
-VITE_OIDC_REDIRECT_URI=http://localhost/callback
-VITE_API_URL=http://localhost/api
-```
-
-### Backend (docker-compose)
-```
-DATABASE_URL=postgres://user:pass@db:5432/backoffice_db
-JWKS_URL=http://rauthy:8443/jwks
-OIDC_ISSUER=http://rauthy:8443
-OIDC_CLIENT_ID=backoffice-frontend
-OIDC_REDIRECT_URI=http://localhost/callback
-```
-
-## Сборка
-
-### Rust (вручную)
-```bash
-cargo build --release -p tangleweavestudios-backoffice-server
-```
-
-### Frontend (вручную)
-```bash
-cd backoffice/frontend
-npm install
-npm run build
-```
-
-## Разработка
-
-### Backend
-```bash
-cd backoffice/server
-cargo run
-```
-
-### Frontend
-```bash
-cd backoffice/frontend
-npm run dev
-```
-
-## TODO
-
-- [ ] App приложение (основное)
-- [ ] WebSocket поддержка
-- [ ] Мониторинг и метрики
-- [ ] CI/CD
-- [ ] Тесты

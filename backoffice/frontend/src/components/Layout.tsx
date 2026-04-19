@@ -1,13 +1,20 @@
-import { Inventory, Logout, People, ShoppingCart } from '@mui/icons-material';
-import { AppBar, Box, Button, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Toolbar, Typography } from '@mui/material';
+import { Inventory, Logout, People, ShoppingCart, AdminPanelSettings } from '@mui/icons-material';
+import { AppBar, Box, Button, Drawer, List, ListItem, ListItemButton, ListItemIcon, ListItemText, Toolbar, Typography, Chip } from '@mui/material';
 import { ReactNode } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import { useAuth } from 'react-oidc-context';
 
 const drawerWidth = 240;
 
 interface LayoutProps {
   children?: ReactNode;
+}
+
+interface CustomProfile {
+  roles?: string[];
+  preferred_username?: string;
+  email?: string;
+  name?: string;
 }
 
 const menuItems = [
@@ -17,12 +24,16 @@ const menuItems = [
 ];
 
 export function Layout({}: LayoutProps) {
-  const { user, logout } = useAuth();
+  const auth = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
+  const profile = auth.user?.profile as CustomProfile | undefined;
+  const displayName = profile?.preferred_username || profile?.name || profile?.email || 'User';
+  const roles = profile?.roles || [];
+
   const handleLogout = () => {
-    logout();
+    void auth.removeUser();
     navigate('/login');
   };
 
@@ -30,13 +41,26 @@ export function Layout({}: LayoutProps) {
     <Box sx={{ display: 'flex' }}>
       <AppBar position="fixed" sx={{ zIndex: theme => theme.zIndex.drawer + 1 }}>
         <Toolbar>
+          <AdminPanelSettings sx={{ mr: 2 }} />
           <Typography variant="h6" noWrap sx={{ flexGrow: 1 }}>
-            Admin Panel
+            TangleWeave Admin
           </Typography>
+          <Chip 
+            label={roles.includes('admin') ? 'Admin' : roles[0] || 'User'} 
+            size="small" 
+            sx={{ mr: 2, backgroundColor: roles.includes('admin') ? '#667eea' : '#666' }} 
+          />
           <Typography variant="body2" sx={{ mr: 2 }}>
-            {user?.name}
+            {displayName}
           </Typography>
-          <Button color="inherit" onClick={handleLogout} startIcon={<Logout />}>
+          <Button 
+            color="inherit" 
+            onClick={handleLogout} 
+            startIcon={<Logout />}
+            variant="outlined"
+            size="small"
+            sx={{ borderColor: 'rgba(255,255,255,0.3)' }}
+          >
             Logout
           </Button>
         </Toolbar>
@@ -68,7 +92,7 @@ export function Layout({}: LayoutProps) {
         </Box>
       </Drawer>
       
-      <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
+      <Box component="main" sx={{ flexGrow: 1, p: 3, backgroundColor: '#f5f5f5', minHeight: '100vh' }}>
         <Toolbar />
         <Outlet />
       </Box>

@@ -16,17 +16,6 @@ COPY shared/utils/Cargo.toml ./shared/utils/Cargo.toml
 
 RUN mkdir -p backoffice/server/migrations
 
-# Имитируем пустой проект для кеширования зависимостей
-RUN mkdir -p app/client/src && echo "fn main() {}" > app/client/src/main.rs
-RUN mkdir -p app/server/src && echo "fn main() {}" > app/server/src/main.rs
-RUN mkdir -p backoffice/client/src && echo "fn main() {}" > backoffice/client/src/main.rs
-RUN mkdir -p backoffice/server/src && echo "fn main() {}" > backoffice/server/src/main.rs
-RUN mkdir -p shared/models/src && touch shared/models/src/lib.rs
-RUN mkdir -p shared/protocol/src && touch shared/protocol/src/lib.rs
-RUN mkdir -p shared/utils/src && touch shared/utils/src/lib.rs
-# Собираем только зависимости конкретного пакета
-RUN cargo build --release -p tangleweavestudios-backoffice-server
-
 # 3. Копируем реальный код
 COPY shared/models/src ./shared/models/src
 COPY shared/protocol/src ./shared/protocol/src
