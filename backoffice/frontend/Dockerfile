@@ -3,7 +3,12 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 COPY . .
-COPY .env.production .env.production
+
+ARG VITE_OIDC_AUTHORITY
+ARG VITE_OIDC_CLIENT_ID
+ENV VITE_OIDC_AUTHORITY=$VITE_OIDC_AUTHORITY
+ENV VITE_OIDC_CLIENT_ID=$VITE_OIDC_CLIENT_ID
+
 RUN npm run build
 
 FROM nginx:alpine

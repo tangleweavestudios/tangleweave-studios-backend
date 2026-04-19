@@ -1,5 +1,5 @@
 [server]
-pub_url = "localhost"
+pub_url = "auth.tangleweave.local"
 proxy_mode = true
 trusted_proxies = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 
@@ -23,9 +23,9 @@ secret_raft = "TangleweaveRaftSecretKey12345678"
 secret_api = "TangleweaveApiSecretKey123456789"
 
 [webauthn]
-rp_id = "localhost"
-rp_origin = "https://localhost:443"
-rp_name = "Tangleweave Auth"
+rp_id = "tangleweave.local"
+rp_origin = "https://auth.tangleweave.local:443"
+rp_name = "Tangleweave Auth Local"
 
 [email]
 smtp_url = "mailcrab"
@@ -34,3 +34,7 @@ smtp_danger_insecure = true
 user = "mailcrab"      # Не 'username', а 'user'!
 password = "mailcrab"
 from = "admin@localhost"
+
+[csp]
+# Разрешаем встраивание только вашим поддоменам
+frame_ancestors = "'self' https://*.tangleweave.local"
