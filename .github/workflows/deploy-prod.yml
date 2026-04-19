@@ -1,0 +1,29 @@
+name: Deploy Production Environment
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH to Synology NAS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.NAS_IP }}
+          username: ${{ secrets.NAS_USER }}
+          key: ${{ secrets.NAS_SSH_KEY }}
+          port: ${{ secrets.NAS_PORT }}
+          script: |
+            cd /volume1/docker/tangleweave-prod
+            
+            git fetch --all
+            git checkout main
+            git pull origin main
+            
+            echo "${{ secrets.ENV_PROD }}" > .env
+            
+            # Запускаем контейнеры с изоляцией по имени проекта (-p prod)
+            sudo docker compose -p tangleweave-prod --profile cloudflare up -d --build

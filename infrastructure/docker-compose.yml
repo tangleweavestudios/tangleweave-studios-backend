@@ -4,18 +4,17 @@ services:
   # ==========================================================================
   db:
     image: postgres:15-alpine
-    container_name: tangleweave_db
     restart: unless-stopped
     environment:
       POSTGRES_USER: tangleweave
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
-      RAUTHY_DB_PASSWORD: ${RAUTHY_DB_PASSWORD:-rauthy_pass}
-      NAKAMA_DB_PASSWORD: ${NAKAMA_DB_PASSWORD:-nakama_pass}
-      APTABASE_DB_PASSWORD: ${APTABASE_DB_PASSWORD:-aptabase_pass}
-      BACKOFFICE_DB_PASSWORD: ${BACKOFFICE_DB_PASSWORD:-backoffice_pass}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      RAUTHY_DB_PASSWORD: ${RAUTHY_DB_PASSWORD}
+      NAKAMA_DB_PASSWORD: ${NAKAMA_DB_PASSWORD}
+      APTABASE_DB_PASSWORD: ${APTABASE_DB_PASSWORD}
+      BACKOFFICE_DB_PASSWORD: ${BACKOFFICE_DB_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./configs/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+      - ./postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
     networks:
       - internal
     healthcheck:
@@ -32,66 +31,56 @@ services:
   # ==========================================================================
   mailcrab:
     image: marlonb/mailcrab:latest
-    container_name: tangleweave_mailcrab
     restart: unless-stopped
     ports:
-      - "127.0.0.1:1080:1080"
+      # Локально открываем порт 1080. На сервере он будет доступен только через туннель или закрыт.
+      - "${MAILCRAB_PORT:-1080}:1080"
     networks:
       - internal
+    profiles:
+      - dev # Mailcrab будет запускаться только локально или в test, если указать этот профиль
 
   # ==========================================================================
-  # RAUTHY (OIDC Provider) - Bootstrapping
+  # RAUTHY (OIDC Provider)
   # ==========================================================================
-  # On first clean run, automatically creates:
-  # - Admin user: admin@localhost.de (password in BOOTSTRAP_ADMIN_PASSWORD_PLAIN)
-  # - API Key: bootstrap (with full Clients/Roles permissions)
-  # Run scripts/init-sso.sh after first startup to configure OIDC clients
   rauthy:
     image: ghcr.io/sebadob/rauthy:0.35.1
-    container_name: tangleweave_rauthy
     restart: unless-stopped
     environment:
-      # --- ПАРАМЕТРЫ ПОЧТЫ (Явно, чтобы не было паники) ---
-      - SMTP_URL=mailcrab
-      - SMTP_PORT=1025
-      - SMTP_USERNAME=mailcrab
-      - SMTP_PASSWORD=mailcrab
-      - SMTP_FROM=admin@localhost.de
-      - SMTP_DANGER_INSECURE=true
-
-      # Пароль от Postgres берем из переменных Docker
-      - PG_PASSWORD=${RAUTHY_DB_PASSWORD:-rauthy_pass}
-      # Пароль администратора при первом запуске
-      - BOOTSTRAP_ADMIN_PASSWORD_PLAIN=${BOOTSTRAP_ADMIN_PASSWORD_PLAIN:-MySuperSafePassword123!}
+      - SMTP_URL=${SMTP_URL:-mailcrab}
+      - SMTP_PORT=${SMTP_PORT:-1025}
+      - SMTP_USERNAME=${SMTP_USERNAME:-mailcrab}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-mailcrab}
+      - SMTP_FROM=${SMTP_FROM:-admin@localhost.de}
+      - SMTP_DANGER_INSECURE=${SMTP_DANGER_INSECURE:-true}
+      - PG_PASSWORD=${RAUTHY_DB_PASSWORD}
+      - BOOTSTRAP_ADMIN_PASSWORD_PLAIN=${BOOTSTRAP_ADMIN_PASSWORD_PLAIN}
     volumes:
       - rauth_data:/app/data
-      - ./infrastructure/rauthy/config.toml:/app/config.toml:ro
+      - ./rauthy/config.${APP_ENV}.toml:/app/config.toml:ro
     networks:
       - internal
     depends_on:
       db:
         condition: service_healthy
-      mailcrab:
-        condition: service_started
 
   # ==========================================================================
   # NAKAMA (Game Server)
   # ==========================================================================
   nakama:
     image: heroiclabs/nakama:3.25.0
-    container_name: tangleweave_nakama
     restart: unless-stopped
     entrypoint:
       - "/bin/sh"
       - "-ecx"
       - >
-        /nakama/nakama migrate up --database.address nakama:${NAKAMA_DB_PASSWORD:-nakama_pass}@db:5432/nakama_db &&
-        exec /nakama/nakama --name tangleweave --database.address nakama:${NAKAMA_DB_PASSWORD:-nakama_pass}@db:5432/nakama_db --socket.port 7350 --console.port 7351 --runtime.js_entrypoint auth_rauthy.js
+        /nakama/nakama migrate up --database.address nakama:${NAKAMA_DB_PASSWORD}@db:5432/nakama_db &&
+        exec /nakama/nakama --name tangleweave --database.address nakama:${NAKAMA_DB_PASSWORD}@db:5432/nakama_db --socket.port 7350 --console.port 7351 --runtime.js_entrypoint auth_rauthy.js
     environment:
       - NAKAMA_LICENSE_KEY=${NAKAMA_LICENSE_KEY:-}
-      - RAUTHY_ISSUER=${RAUTHY_ISSUER:-https://tangleweave_rauthy:8443}
-      - RAUTHY_JWKS_URL=${RAUTHY_JWKS_URL:-https://tangleweave_rauthy:8443/auth/v1/oidc/certs}
-      - RAUTHY_CLIENT_ID=${RAUTHY_CLIENT_ID:-unwind-game}
+      - RAUTHY_ISSUER=${RAUTHY_ISSUER}
+      - RAUTHY_JWKS_URL=${RAUTHY_JWKS_URL}
+      - RAUTHY_CLIENT_ID=${RAUTHY_CLIENT_ID}
     volumes:
       - ./nakama/modules:/nakama/data/modules
       - nakama_data:/nakama/storage
@@ -106,29 +95,23 @@ services:
   # ==========================================================================
   aptabase_events_db:
     image: clickhouse/clickhouse-server:23.8.16.16-alpine
-    container_name: tangleweave_aptabase_events
     restart: unless-stopped
     environment:
       CLICKHOUSE_USER: tangleweave
-      CLICKHOUSE_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+      CLICKHOUSE_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - aptabase_events_data:/var/lib/clickhouse
     networks:
       - internal
-    ulimits:
-      nofile:
-        soft: 262144
-        hard: 262144
 
   aptabase:
     image: ghcr.io/aptabase/aptabase:main
-    container_name: tangleweave_aptabase
     restart: unless-stopped
     environment:
-      DATABASE_URL: Server=db;Port=5432;User Id=aptabase;Password=${APTABASE_DB_PASSWORD:-aptabase_pass};Database=aptabase_db
-      CLICKHOUSE_URL: Host=aptabase_events_db;Port=8123;Username=tangleweave;Password=${POSTGRES_PASSWORD:-change_me_in_production}
-      AUTH_SECRET: ${APABASE_AUTH_SECRET:-change_me_use_strong_random_string}
-      BASE_URL: http://localhost:3000
+      DATABASE_URL: Server=db;Port=5432;User Id=aptabase;Password=${APTABASE_DB_PASSWORD};Database=aptabase_db
+      CLICKHOUSE_URL: Host=aptabase_events_db;Port=8123;Username=tangleweave;Password=${POSTGRES_PASSWORD}
+      AUTH_SECRET: ${APABASE_AUTH_SECRET}
+      BASE_URL: ${APTABASE_BASE_URL:-http://localhost:3000}
     volumes:
       - aptabase_data:/app/data
     networks:
@@ -140,23 +123,22 @@ services:
         condition: service_started
 
   # ==========================================================================
-  # BACKOFFICE API (Rust/Axum Microservice)
+  # BACKOFFICE API (Rust/Axum)
   # ==========================================================================
   backoffice-api:
     build:
-      context: .
+      context: ../
       dockerfile: Dockerfile
-    container_name: tangleweave_backoffice_api
     restart: unless-stopped
     environment:
-      - DATABASE_URL=${BACKOFFICE_DATABASE_URL:-postgresql://backoffice:${BACKOFFICE_DB_PASSWORD:-backoffice_pass}@db:5432/backoffice_db}
-      - BACKOFFICE_ADMIN_KEY=${BACKOFFICE_ADMIN_KEY:-change_me_in_production}
-      - OIDC_ISSUER=${OIDC_ISSUER:-https://rauthy:8443}
-      - JWKS_URL=${JWKS_URL:-https://rauthy:8443/auth/v1/oidc/certs}
-      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-backoffice-api}
+      - DATABASE_URL=postgresql://backoffice:${BACKOFFICE_DB_PASSWORD}@db:5432/backoffice_db
+      - BACKOFFICE_ADMIN_KEY=${BACKOFFICE_ADMIN_KEY}
+      - OIDC_ISSUER=${OIDC_ISSUER}
+      - JWKS_URL=${JWKS_URL}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID}
       - NAKAMA_URL=http://nakama:7350
-      - NAKAMA_API_KEY=${NAKAMA_API_KEY:-}
-      - PAYMENT_WEBHOOK_SECRET=${PAYMENT_WEBHOOK_SECRET:-}
+      - NAKAMA_API_KEY=${NAKAMA_API_KEY}
+      - PAYMENT_WEBHOOK_SECRET=${PAYMENT_WEBHOOK_SECRET}
       - RUST_LOG=info
     networks:
       - internal
@@ -171,11 +153,10 @@ services:
     build:
       context: ./backoffice/frontend
       dockerfile: Dockerfile
-    container_name: tangleweave_backoffice_frontend
     restart: unless-stopped
     environment:
-      - VITE_OIDC_AUTHORITY=https://localhost/auth/v1
-      - VITE_OIDC_CLIENT_ID=backoffice-admin
+      - VITE_OIDC_AUTHORITY=${VITE_OIDC_AUTHORITY}
+      - VITE_OIDC_CLIENT_ID=${VITE_OIDC_CLIENT_ID}
     networks:
       - internal
 
@@ -184,7 +165,6 @@ services:
   # ==========================================================================
   nginx:
     image: nginx:alpine
-    container_name: tangleweave_nginx
     restart: unless-stopped
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
@@ -192,8 +172,10 @@ services:
     networks:
       - internal
     ports:
-      - "80:80"
-      - "443:443"
+      # Локально: 80 и 443. На сервере Synology мы отключим биндинг портов,
+      # чтобы избежать конфликтов (трафик пойдет через Cloudflare Tunnel)
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
     depends_on:
       - backoffice-frontend
       - backoffice-api
@@ -201,19 +183,17 @@ services:
       - nakama
 
   # ==========================================================================
-  # CLOUDFLARE TUNNEL (Production Proxy)
+  # CLOUDFLARE TUNNEL (Production / Test Proxy)
   # ==========================================================================
   cloudflared:
     image: cloudflare/cloudflared:latest
-    container_name: tangleweave_tunnel
     restart: unless-stopped
     command: tunnel --no-autoupdate run --token ${CF_TUNNEL_TOKEN}
-    environment:
-      - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
     networks:
       - internal
+    # Запускается только если есть токен (для локалки он не нужен)
     profiles:
-      - production
+      - cloudflare
 
 networks:
   internal:
@@ -225,17 +205,3 @@ volumes:
   nakama_data:
   aptabase_data:
   aptabase_events_data:
-
-x-backup-template: &backup-template
-  image: prodrigestivill/postgres-backup-local:latest
-  environment:
-    POSTGRES_HOST: db
-    POSTGRES_USER: tangleweave
-    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
-    SCHEDULE: "@daily"
-    BACKUP_RETENTION_DAYS: 7
-    BACKUP_DIR: /backups
-  volumes:
-    - ./backups:/backups
-  networks:
-    - internal

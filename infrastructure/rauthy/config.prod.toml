@@ -1,0 +1,36 @@
+[server]
+pub_url = "localhost"
+proxy_mode = true
+trusted_proxies = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+
+[database]
+hiqlite = false
+pg_host = "db"
+pg_port = 5432
+pg_user = "rauthy"
+pg_db_name = "rauthy_db"
+
+[encryption]
+keys = [
+    'q6u26onRvXVG4427/M0NFQzhSSldCY01rckJNa1JYZ3g2NUFtSnNOVGdoU0E=',
+    'bVCyTsGaggVy5yqQ/UzluN29DZW41M3hTSkx6Y3NtZmRuQkR2TnJxUTYzcjQ=',
+]
+key_active = 'bVCyTsGaggVy5yqQ'
+
+[cluster]
+node_id = 1
+secret_raft = "TangleweaveRaftSecretKey12345678"
+secret_api = "TangleweaveApiSecretKey123456789"
+
+[webauthn]
+rp_id = "localhost"
+rp_origin = "https://localhost:443"
+rp_name = "Tangleweave Auth"
+
+[email]
+smtp_url = "mailcrab"
+smtp_port = 1025
+smtp_danger_insecure = true
+user = "mailcrab"      # Не 'username', а 'user'!
+password = "mailcrab"
+from = "admin@localhost"
