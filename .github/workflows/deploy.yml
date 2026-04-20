@@ -50,11 +50,20 @@ jobs:
     if: github.ref == 'refs/heads/dev'
     runs-on: self-hosted
     steps:
+      # 1. ОБЯЗАТЕЛЬНО: Скачиваем репозиторий на раннер NAS
+      - uses: actions/checkout@v4
+
       - name: Deploy to Test Environment
         run: |
+          # Создаем рабочую папку на NAS
+          mkdir -p /volume1/docker/tangleweave-test
+          
+          cp -a infrastructure/. /volume1/docker/tangleweave-test/
+          
+          # Переходим в рабочую папку
           cd /volume1/docker/tangleweave-test
           
-          # Просто берем секрет целиком. DOMAIN_NAME и APP_ENV уже внутри!
+          # Генерируем секреты
           cat << 'EOF' > .env
           ${{ secrets.ENV_TEST }}
           EOF
@@ -64,6 +73,7 @@ jobs:
           ${{ secrets.RAUTHY_CONFIG_TEST }}
           EOF
           
+          # Запускаем Docker
           echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           docker compose --env-file .env -p tangleweave-test --profile cloudflare pull
           docker compose --env-file .env -p tangleweave-test --profile cloudflare up -d --remove-orphans
@@ -108,11 +118,17 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: self-hosted
     steps:
+      # 1. Скачиваем репозиторий
+      - uses: actions/checkout@v4
+
       - name: Deploy to Production Environment
         run: |
+          mkdir -p /volume1/docker/tangleweave-prod
+          
+          cp -a infrastructure/. /volume1/docker/tangleweave-prod/
+          
           cd /volume1/docker/tangleweave-prod
           
-          # Чистый перенос секрета
           cat << 'EOF' > .env
           ${{ secrets.ENV_PROD }}
           EOF
@@ -123,6 +139,7 @@ jobs:
           EOF
           
           echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker compose --env-file .env -p tangleweave-prod pull
-          docker compose --env-file .env -p tangleweave-prod up -d --remove-orphans
+          # 3. Добавил --profile cloudflare, чтобы туннель поднимался и в проде!
+          docker compose --env-file .env -p tangleweave-prod --profile cloudflare pull
+          docker compose --env-file .env -p tangleweave-prod --profile cloudflare up -d --remove-orphans
           docker image prune -f
