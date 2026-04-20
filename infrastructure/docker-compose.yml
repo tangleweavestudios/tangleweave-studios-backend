@@ -127,7 +127,7 @@ services:
   # BACKOFFICE API (Rust/Axum)
   # ==========================================================================
   backoffice-api:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-tangleweave}/backoffice-api:latest # <--- ДОБАВИТЬ
+    image: ghcr.io/leonidagapkin/backoffice-api:${APP_ENV:-local}
     build:
       context: ../
       dockerfile: Dockerfile
@@ -152,7 +152,7 @@ services:
   # BACKOFFICE FRONTEND (React SPA)
   # ==========================================================================
   backoffice-frontend:
-    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-tangleweave}/backoffice-frontend:latest # <--- ДОБАВИТЬ
+    image: ghcr.io/leonidagapkin/backoffice-frontend:${APP_ENV:-local}
     build:
       context: ../backoffice/frontend
       dockerfile: Dockerfile
