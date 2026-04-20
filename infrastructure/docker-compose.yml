@@ -128,7 +128,6 @@ services:
   # ==========================================================================
   backoffice-api:
     image: ghcr.io/tangleweavestudios/backoffice-api:${APP_ENV:-local}
-    container_name: backoffice-api
     restart: always
     build:
       context: ../
@@ -154,7 +153,6 @@ services:
   # ==========================================================================
   backoffice-frontend:
     image: ghcr.io/tangleweavestudios/backoffice-frontend:${APP_ENV:-local}
-    container_name: backoffice-frontend
     restart: unless-stopped
     build:
       context: ../backoffice/frontend
