@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - dev
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: read
@@ -28,7 +30,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Push Backoffice API (TEST)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
@@ -36,13 +38,13 @@ jobs:
           tags: ghcr.io/${{ github.repository_owner }}/backoffice-api:test
 
       - name: Build and Push Frontend (TEST)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./backoffice/frontend
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/backoffice-frontend:test
           build-args: |
-            VITE_OIDC_AUTHORITY=https://auth.test.tangleweavestudios.com/auth/v1
+            VITE_OIDC_AUTHORITY=https://auth-test.tangleweavestudios.com/auth/v1
             VITE_OIDC_CLIENT_ID=backoffice-admin
 
   deploy-test:
@@ -50,11 +52,20 @@ jobs:
     if: github.ref == 'refs/heads/dev'
     runs-on: self-hosted
     steps:
+      # 1. ОБЯЗАТЕЛЬНО: Скачиваем репозиторий на раннер NAS
+      - uses: actions/checkout@v4
+
       - name: Deploy to Test Environment
         run: |
+          # Создаем рабочую папку на NAS
+          mkdir -p /volume1/docker/tangleweave-test
+          
+          cp -a infrastructure/. /volume1/docker/tangleweave-test/
+          
+          # Переходим в рабочую папку
           cd /volume1/docker/tangleweave-test
           
-          # Просто берем секрет целиком. DOMAIN_NAME и APP_ENV уже внутри!
+          # Генерируем секреты
           cat << 'EOF' > .env
           ${{ secrets.ENV_TEST }}
           EOF
@@ -64,10 +75,13 @@ jobs:
           ${{ secrets.RAUTHY_CONFIG_TEST }}
           EOF
           
+          # Запускаем Docker
           echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           docker compose --env-file .env -p tangleweave-test --profile cloudflare pull
           docker compose --env-file .env -p tangleweave-test --profile cloudflare up -d --remove-orphans
           docker image prune -f
+          
+          docker compose --env-file .env -p tangleweave-test exec -T nginx nginx -s reload
 
   # ==========================================================================
   # 🚀 ТРАССА 2: БОЕВАЯ СРЕДА (main ветка)
@@ -86,15 +100,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Push Backoffice API (PROD)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/backoffice-api:latest
+          tags: ghcr.io/${{ github.repository_owner }}/backoffice-api:prod
 
       - name: Build and Push Frontend (PROD)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./backoffice/frontend
           push: true
@@ -108,11 +122,17 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: self-hosted
     steps:
+      # 1. Скачиваем репозиторий
+      - uses: actions/checkout@v4
+
       - name: Deploy to Production Environment
         run: |
+          mkdir -p /volume1/docker/tangleweave-prod
+          
+          cp -a infrastructure/. /volume1/docker/tangleweave-prod/
+          
           cd /volume1/docker/tangleweave-prod
           
-          # Чистый перенос секрета
           cat << 'EOF' > .env
           ${{ secrets.ENV_PROD }}
           EOF
@@ -123,6 +143,9 @@ jobs:
           EOF
           
           echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker compose --env-file .env -p tangleweave-prod pull
-          docker compose --env-file .env -p tangleweave-prod up -d --remove-orphans
+          # 3. Добавил --profile cloudflare, чтобы туннель поднимался и в проде!
+          docker compose --env-file .env -p tangleweave-prod --profile cloudflare pull
+          docker compose --env-file .env -p tangleweave-prod --profile cloudflare up -d --remove-orphans
           docker image prune -f
+          
+          docker compose --env-file .env -p tangleweave-prod exec -T nginx nginx -s reload

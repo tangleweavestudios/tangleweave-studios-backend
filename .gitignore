@@ -2,3 +2,9 @@ target/
 backoffice/frontend/node_modules/
 backoffice/frontend/dist/
 data/
+env/
+.env.local
+.env.prod
+.env.test
+config.prod.toml
+config.test.toml
