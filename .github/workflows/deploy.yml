@@ -30,7 +30,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Push Backoffice API (TEST)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
@@ -38,13 +38,13 @@ jobs:
           tags: ghcr.io/${{ github.repository_owner }}/backoffice-api:test
 
       - name: Build and Push Frontend (TEST)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./backoffice/frontend
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/backoffice-frontend:test
           build-args: |
-            VITE_OIDC_AUTHORITY=https://auth.test.tangleweavestudios.com/auth/v1
+            VITE_OIDC_AUTHORITY=https://auth-test.tangleweavestudios.com/auth/v1
             VITE_OIDC_CLIENT_ID=backoffice-admin
 
   deploy-test:
@@ -98,7 +98,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Push Backoffice API (PROD)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
@@ -106,7 +106,7 @@ jobs:
           tags: ghcr.io/${{ github.repository_owner }}/backoffice-api:prod
 
       - name: Build and Push Frontend (PROD)
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: ./backoffice/frontend
           push: true
