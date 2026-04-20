@@ -1,5 +1,5 @@
 [server]
-pub_url = "auth.tangleweave.local"
+pub_url = "auth.test.tangleweavestudios.com"
 proxy_mode = true
 trusted_proxies = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 
@@ -12,18 +12,18 @@ pg_db_name = "rauthy_db"
 
 [encryption]
 keys = [
-    'key200426/9AIs87KBWu0HpCbJHVpxqRjuf9AOK4O6agkFLSoYFO8=',
+    'key200426/ke7GuMleRCcjP0okyXZJwK74420z876BR3mvq/lRDGw='
 ]
 key_active = 'key200426'
 
 [cluster]
 node_id = 1
-secret_raft = "8c330e73e40cd489ae05b24af7d0f46860fd15e0506d2ea7a211278f2bea1ba3"
-secret_api = "8baaf0976cef3d27869ef0c991116ad4839426a963f4461a65704a4bb2aa0000"
+secret_raft = "93c4b5ebffefed9946da0cfacacb8da47243598d14f416cc2022911fc6862190"
+secret_api = "f9719cca8bb29832d857b4c5d1285f74f74c70b2749a3b0231c8cfb4449f9ac1"
 
 [webauthn]
-rp_id = "tangleweave.local"
-rp_origin = "https://auth.tangleweave.local:443"
+rp_id = "test.tangleweavestudios.com"
+rp_origin = "https://auth.test.tangleweavestudios.com:443"
 rp_name = "Tangleweave Auth Local"
 
 [email]
@@ -36,4 +36,4 @@ from = "admin@localhost"
 
 [csp]
 # Разрешаем встраивание только вашим поддоменам
-frame_ancestors = "'self' https://*.tangleweave.local"
+frame_ancestors = "'self' https://*.test.tangleweavestudios.com"

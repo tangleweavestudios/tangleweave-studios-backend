@@ -1,0 +1,128 @@
+name: Tangleweave CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # ==========================================================================
+  # 🧪 ТРАССА 1: ТЕСТОВАЯ СРЕДА (dev ветка)
+  # ==========================================================================
+  build-test:
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Backoffice API (TEST)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/backoffice-api:test
+
+      - name: Build and Push Frontend (TEST)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backoffice/frontend
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/backoffice-frontend:test
+          build-args: |
+            VITE_OIDC_AUTHORITY=https://auth.test.tangleweavestudios.com/auth/v1
+            VITE_OIDC_CLIENT_ID=backoffice-admin
+
+  deploy-test:
+    needs: build-test
+    if: github.ref == 'refs/heads/dev'
+    runs-on: self-hosted
+    steps:
+      - name: Deploy to Test Environment
+        run: |
+          cd /volume1/docker/tangleweave-test
+          
+          # Просто берем секрет целиком. DOMAIN_NAME и APP_ENV уже внутри!
+          cat << 'EOF' > .env
+          ${{ secrets.ENV_TEST }}
+          EOF
+          
+          mkdir -p rauthy
+          cat << 'EOF' > rauthy/config.test.toml
+          ${{ secrets.RAUTHY_CONFIG_TEST }}
+          EOF
+          
+          echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker compose --env-file .env -p tangleweave-test --profile cloudflare pull
+          docker compose --env-file .env -p tangleweave-test --profile cloudflare up -d --remove-orphans
+          docker image prune -f
+
+  # ==========================================================================
+  # 🚀 ТРАССА 2: БОЕВАЯ СРЕДА (main ветка)
+  # ==========================================================================
+  build-prod:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Backoffice API (PROD)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/backoffice-api:latest
+
+      - name: Build and Push Frontend (PROD)
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backoffice/frontend
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/backoffice-frontend:prod
+          build-args: |
+            VITE_OIDC_AUTHORITY=https://auth.tangleweavestudios.com/auth/v1
+            VITE_OIDC_CLIENT_ID=backoffice-admin
+
+  deploy-prod:
+    needs: build-prod
+    if: github.ref == 'refs/heads/main'
+    runs-on: self-hosted
+    steps:
+      - name: Deploy to Production Environment
+        run: |
+          cd /volume1/docker/tangleweave-prod
+          
+          # Чистый перенос секрета
+          cat << 'EOF' > .env
+          ${{ secrets.ENV_PROD }}
+          EOF
+          
+          mkdir -p rauthy
+          cat << 'EOF' > rauthy/config.prod.toml
+          ${{ secrets.RAUTHY_CONFIG_PROD }}
+          EOF
+          
+          echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker compose --env-file .env -p tangleweave-prod pull
+          docker compose --env-file .env -p tangleweave-prod up -d --remove-orphans
+          docker image prune -f

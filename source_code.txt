@@ -1,0 +1,601 @@
+# ============================================================================
+# TANGLEWEAVE STUDIOS BACKEND - COMPLETE SOURCE CODE
+# ============================================================================
+
+# ============================================================================
+# DOCKER-COMPOSE (infrastructure/docker-compose.yml)
+# ============================================================================
+
+services:
+  # POSTGRESQL CLUSTER
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tangleweave
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      RAUTHY_DB_PASSWORD: ${RAUTHY_DB_PASSWORD}
+      NAKAMA_DB_PASSWORD: ${NAKAMA_DB_PASSWORD}
+      APTABASE_DB_PASSWORD: ${APTABASE_DB_PASSWORD}
+      BACKOFFICE_DB_PASSWORD: ${BACKOFFICE_DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init-databases.sh:/docker-entrypoint-initdb.d/10-init-databases.sh:ro
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tangleweave"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: postgres -c max_connections=200
+
+  # MAILCRAB (SMTP for Development)
+  mailcrab:
+    image: marlonb/mailcrab:latest
+    restart: unless-stopped
+    ports:
+      - "${MAILCRAB_PORT:-1080}:1080"
+    networks:
+      - internal
+    profiles:
+      - dev
+      - local
+
+  # RAUTHY (OIDC Provider)
+  rauthy:
+    image: ghcr.io/sebadob/rauthy:0.35.1
+    restart: unless-stopped
+    environment:
+      - SMTP_URL=${SMTP_URL:-mailcrab}
+      - SMTP_PORT=${SMTP_PORT:-1025}
+      - SMTP_USERNAME=${SMTP_USERNAME:-mailcrab}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-mailcrab}
+      - SMTP_FROM=${SMTP_FROM:-admin@localhost.de}
+      - SMTP_DANGER_INSECURE=${SMTP_DANGER_INSECURE:-true}
+      - PG_PASSWORD=${RAUTHY_DB_PASSWORD}
+      - BOOTSTRAP_ADMIN_PASSWORD_PLAIN=${BOOTSTRAP_ADMIN_PASSWORD_PLAIN}
+    volumes:
+      - rauth_data:/app/data
+      - ./rauthy/config.${APP_ENV}.toml:/app/config.toml:ro
+    networks:
+      - internal
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # NAKAMA (Game Server)
+  nakama:
+    image: heroiclabs/nakama:3.25.0
+    restart: unless-stopped
+    entrypoint:
+      - "/bin/sh"
+      - "-ecx"
+      - >
+        /nakama/nakama migrate up --database.address nakama:${NAKAMA_DB_PASSWORD}@db:5432/nakama_db &&
+        exec /nakama/nakama --name tangleweave --database.address nakama:${NAKAMA_DB_PASSWORD}@db:5432/nakama_db --socket.port 7350 --console.port 7351 --runtime.js_entrypoint auth_rauthy.js
+    environment:
+      - NAKAMA_LICENSE_KEY=${NAKAMA_LICENSE_KEY:-}
+      - RAUTHY_ISSUER=${RAUTHY_ISSUER}
+      - RAUTHY_JWKS_URL=${RAUTHY_JWKS_URL}
+      - RAUTHY_CLIENT_ID=${RAUTHY_CLIENT_ID}
+    volumes:
+      - ./nakama/modules:/nakama/data/modules
+      - nakama_data:/nakama/storage
+    networks:
+      - internal
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # APTABASE (Self-hosted Analytics)
+  aptabase_events_db:
+    image: clickhouse/clickhouse-server:23.8.16.16-alpine
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: tangleweave
+      CLICKHOUSE_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - aptabase_events_data:/var/lib/clickhouse
+    networks:
+      - internal
+
+  aptabase:
+    image: ghcr.io/aptabase/aptabase:main
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: Server=db;Port=5432;User Id=aptabase;Password=${APTABASE_DB_PASSWORD};Database=aptabase_db
+      CLICKHOUSE_URL: Host=aptabase_events_db;Port=8123;Username=tangleweave;Password=${POSTGRES_PASSWORD}
+      AUTH_SECRET: ${APABASE_AUTH_SECRET}
+      BASE_URL: ${APTABASE_BASE_URL:-http://localhost:3000}
+    volumes:
+      - aptabase_data:/app/data
+    networks:
+      - internal
+    depends_on:
+      db:
+        condition: service_healthy
+      aptabase_events_db:
+        condition: service_started
+
+  # BACKOFFICE API (Rust/Axum)
+  backoffice-api:
+    build:
+      context: ../
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://backoffice:${BACKOFFICE_DB_PASSWORD}@db:5432/backoffice_db
+      - BACKOFFICE_ADMIN_KEY=${BACKOFFICE_ADMIN_KEY}
+      - OIDC_ISSUER=${OIDC_ISSUER}
+      - JWKS_URL=${JWKS_URL}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID}
+      - NAKAMA_URL=http://nakama:7350
+      - NAKAMA_API_KEY=${NAKAMA_API_KEY}
+      - PAYMENT_WEBHOOK_SECRET=${PAYMENT_WEBHOOK_SECRET}
+      - RUST_LOG=info
+    networks:
+      - internal
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # BACKOFFICE FRONTEND (React SPA)
+  backoffice-frontend:
+    build:
+      context: ../backoffice/frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_OIDC_AUTHORITY=${VITE_OIDC_AUTHORITY:-/auth/v1}
+        - VITE_OIDC_CLIENT_ID=${VITE_OIDC_CLIENT_ID:-backoffice-admin}
+    restart: unless-stopped
+    networks:
+      - internal
+
+  # NGINX (API Gateway)
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    networks:
+      internal:
+        aliases:
+          - auth.tangleweave.local
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+    depends_on:
+      - backoffice-frontend
+      - backoffice-api
+      - rauthy
+      - nakama
+
+  # OAUTH2 PROXY
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+    restart: unless-stopped
+    command: --code-challenge-method=S256
+    environment:
+      - OAUTH2_PROXY_PROVIDER=oidc
+      - OAUTH2_PROXY_OIDC_ISSUER_URL=${OIDC_ISSUER}
+      - OAUTH2_PROXY_CLIENT_ID=${OAUTH2_PROXY_CLIENT_ID:-tangleweave-internal}
+      - OAUTH2_PROXY_CLIENT_SECRET=${OAUTH2_PROXY_CLIENT_SECRET}
+      - OAUTH2_PROXY_COOKIE_SECRET=${OAUTH2_PROXY_COOKIE_SECRET}
+      - OAUTH2_PROXY_COOKIE_DOMAINS=${OAUTH2_PROXY_COOKIE_DOMAIN}
+      - OAUTH2_PROXY_WHITELIST_DOMAINS=${OAUTH2_PROXY_COOKIE_DOMAIN}
+      - OAUTH2_PROXY_EMAIL_DOMAINS=*
+      - OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
+      - OAUTH2_PROXY_UPSTREAMS=file:///dev/null
+      - OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true
+      - OAUTH2_PROXY_SSL_INSECURE_SKIP_VERIFY=true
+    networks:
+      internal:
+        aliases:
+          - auth.tangleweave.local
+          - app.tangleweave.local
+    depends_on:
+      - rauthy
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  rauth_data:
+  nakama_data:
+  aptabase_data:
+  aptabase_events_data:
+
+# ============================================================================
+# NGINX CONFIGURATION (infrastructure/nginx/nginx.conf)
+# ============================================================================
+
+worker_processes auto;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    
+    upstream frontend       { server backoffice-frontend:3000; }
+    upstream rust_api       { server backoffice-api:8080; }
+    upstream nakama_api     { server nakama:7350; }
+    upstream nakama_console { server nakama:7351; }
+    upstream analytics      { server aptabase:8080; }
+    upstream rauthy         { server rauthy:8443; }
+    upstream mailcrab       { server mailcrab:1080; }
+    upstream oauth2_proxy   { server oauth2-proxy:4180; }
+
+    # HTTP -> HTTPS redirect
+    server {
+        listen 80 default_server;
+        server_name _;
+        return 301 https://$host$request_uri;
+    }
+
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        ''      close;
+    }
+
+    # FRONTEND (React SPA) - app.*
+    server {
+        listen 443 ssl;
+        server_name app.*;
+        ssl_certificate /etc/nginx/certs/cert.pem;
+        ssl_certificate_key /etc/nginx/certs/key.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
+
+        location / {
+            proxy_pass http://frontend;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+        }
+    }
+
+    # BACKOFFICE API - api.*
+    server {
+        listen 443 ssl;
+        server_name api.*;
+        ssl_certificate /etc/nginx/certs/cert.pem;
+        ssl_certificate_key /etc/nginx/certs/key.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
+
+        location / {
+            proxy_pass http://rust_api/;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+        }
+    }
+
+    # RAUTHY SSO - auth.*
+    server {
+        listen 443 ssl;
+        server_name auth.*;
+        ssl_certificate /etc/nginx/certs/cert.pem;
+        ssl_certificate_key /etc/nginx/certs/key.pem;
+
+        location / {
+            proxy_pass https://rauthy;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_ssl_verify off;
+        }
+    }
+
+    # NAKAMA GAME API - game.*
+    server {
+        listen 443 ssl;
+        server_name game.*;
+        ssl_certificate /etc/nginx/certs/cert.pem;
+        ssl_certificate_key /etc/nginx/certs/key.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
+
+        location / {
+            proxy_pass http://nakama_api;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "Upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+        }
+    }
+
+    # NAKAMA CONSOLE - console.*
+    server {
+        listen 443 ssl;
+        server_name console.*;
+        ssl_certificate /etc/nginx/certs/cert.pem;
+        ssl_certificate_key /etc/nginx/certs/key.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
+
+        location /oauth2/ {
+            proxy_pass http://oauth2_proxy;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Scheme $scheme;
+            proxy_set_header X-Auth-Request-Redirect $request_uri;
+        }
+
+        location / {
+            auth_request /oauth2/auth;
+            error_page 401 = /oauth2/sign_in;
+            proxy_pass http://nakama_console;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        }
+    }
+
+    # APTABASE ANALYTICS - analytics.*
+    server {
+        listen 443 ssl;
+        server_name analytics.*;
+        ssl_certificate /etc/nginx/certs/cert.pem;
+        ssl_certificate_key /etc/nginx/certs/key.pem;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_ciphers HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers on;
+
+        location /oauth2/ { proxy_pass http://oauth2_proxy; proxy_set_header Host $host; }
+        location / {
+            auth_request /oauth2/auth;
+            error_page 401 = /oauth2/sign_in;
+            proxy_pass http://analytics;
+            proxy_set_header Host $host;
+        }
+    }
+}
+
+# ============================================================================
+# RAUTHY CONFIG (infrastructure/rauthy/config.local.toml)
+# ============================================================================
+
+[server]
+pub_url = "auth.tangleweave.local"
+proxy_mode = true
+trusted_proxies = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+
+[database]
+hiqlite = false
+pg_host = "db"
+pg_port = 5432
+pg_user = "rauthy"
+pg_db_name = "rauthy_db"
+
+[encryption]
+keys = [
+    'q6u26onRvXVG4427/M0NFQzhSSldCY01rckJNa1JYZ3g2NUFtSnNOVGdoU0E=',
+    'bVCyTsGaggVy5yqQ/UzluN29DZW41M3hTSkx6Y3NtZmRuQkR2TnJxUTYzcjQ=',
+]
+key_active = 'bVCyTsGaggVy5yqQ'
+
+[cluster]
+node_id = 1
+secret_raft = "TangleweaveRaftSecretKey12345678"
+secret_api = "TangleweaveApiSecretKey123456789"
+
+[webauthn]
+rp_id = "tangleweave.local"
+rp_origin = "https://auth.tangleweave.local:443"
+rp_name = "Tangleweave Auth Local"
+
+[email]
+smtp_url = "mailcrab"
+smtp_port = 1025
+smtp_danger_insecure = true
+user = "mailcrab"
+password = "mailcrab"
+from = "admin@localhost"
+
+[csp]
+frame_ancestors = "'self' https://*.tangleweave.local"
+
+# ============================================================================
+# FRONTEND MAIN.TSX (backoffice/frontend/src/main.tsx)
+# ============================================================================
+
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
+import { AuthProvider } from 'react-oidc-context';
+import App from './App';
+import './index.css';
+
+const oidcConfig = {
+  authority: import.meta.env.VITE_OIDC_AUTHORITY || `${window.location.origin}/auth/v1`,
+  client_id: import.meta.env.VITE_OIDC_CLIENT_ID || 'backoffice-admin',
+  redirect_uri: `${window.location.origin}/callback`,
+  response_type: 'code',
+  scope: 'openid profile email roles',
+  usePushedAuthorizationRequests: false,
+  onSigninCallback: () => {
+    window.history.replaceState({}, document.title, window.location.pathname);
+  },
+};
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <AuthProvider {...oidcConfig}>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </AuthProvider>
+  </React.StrictMode>,
+);
+
+# ============================================================================
+# FRONTEND DOCKERFILE (backoffice/frontend/Dockerfile)
+# ============================================================================
+
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY . .
+
+ARG VITE_OIDC_AUTHORITY
+ARG VITE_OIDC_CLIENT_ID
+ENV VITE_OIDC_AUTHORITY=$VITE_OIDC_AUTHORITY
+ENV VITE_OIDC_CLIENT_ID=$VITE_OIDC_CLIENT_ID
+
+RUN npm run build
+
+FROM nginx:alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 3000
+CMD ["nginx", "-g", "daemon off;"]
+
+# ============================================================================
+# POSTGRES INIT (infrastructure/postgres/init-databases.sh)
+# ============================================================================
+
+#!/bin/bash
+set -e
+
+echo "Initializing databases and users..."
+
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE rauthy_db" || echo "rauthy_db already exists"
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE nakama_db" || echo "nakama_db already exists"
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE aptabase_db" || echo "aptabase_db already exists"
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE backoffice_db" || echo "backoffice_db already exists"
+
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "CREATE USER rauthy WITH PASSWORD '${RAUTHY_DB_PASSWORD}'" || echo "User rauthy already exists"
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "CREATE USER nakama WITH PASSWORD '${NAKAMA_DB_PASSWORD}'" || echo "User nakama already exists"
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "CREATE USER aptabase WITH PASSWORD '${APTABASE_DB_PASSWORD}'" || echo "User aptabase already exists"
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "CREATE USER backoffice WITH PASSWORD '${BACKOFFICE_DB_PASSWORD}'" || echo "User backoffice already exists"
+
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE rauthy_db TO rauthy"
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE nakama_db TO nakama"
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE aptabase_db TO aptabase"
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE backoffice_db TO backoffice"
+
+for db in rauthy_db nakama_db aptabase_db backoffice_db; do
+  user=$(echo $db | sed 's/_db$//')
+  psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$db" -c "GRANT ALL ON SCHEMA public TO $user" 2>/dev/null || true
+done
+
+echo "Databases and users initialized successfully!"
+
+# ============================================================================
+# INIT-SSO.SH (infrastructure/scripts/init-sso.sh)
+# ============================================================================
+
+#!/bin/bash
+set -e
+
+API_KEY_SECRET="${BOOTSTRAP_API_KEY_SECRET:-TwUA2M7RZ8H3FyJHbti2AcMADPDCxDqUKbvi8FDnm3nYidwQx57Wfv6iaVTQynMh}"
+RAUTHY_URL="${RAUTHY_URL:-https://auth.tangleweave.local/auth/v1}"
+API_KEY_NAME="bootstrap"
+
+echo_step() { echo -e "[STEP] $1"; }
+echo_success() { echo -e "[OK] $1"; }
+echo_error() { echo -e "[ERROR] $1"; }
+
+wait_for_rauthy() {
+    echo_step "Waiting for Rauthy to be ready..."
+    local max_attempts=30
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        if curl -sk -o /dev/null -w "%{http_code}" "$RAUTHY_URL/health" | grep -q "200"; then
+            echo_success "Rauthy is ready!"
+            return 0
+        fi
+        echo "  Attempt $attempt/$max_attempts..."
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+    echo_error "Rauthy did not become ready in time"
+    return 1
+}
+
+get_auth_header() {
+    echo "API-Key ${API_KEY_NAME}\$${API_KEY_SECRET}"
+}
+
+delete_client() {
+    local client_id="$1"
+    curl -sk -X DELETE "$RAUTHY_URL/clients/$client_id" \
+        -H "Authorization: $(get_auth_header)" 2>/dev/null || true
+}
+
+create_client() {
+    local client_id="$1"
+    local name="$2"
+    local redirect_uris="$3"
+    local scopes="$4"
+    
+    echo_step "Creating client: $client_id"
+    
+    curl -sk -X POST "$RAUTHY_URL/clients" \
+        -H "Authorization: $(get_auth_header)" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"id\": \"$client_id\",
+            \"name\": \"$name\",
+            \"secret\": null,
+            \"confidential\": false,
+            \"redirect_uris\": $redirect_uris,
+            \"post_logout_redirect_uris\": $redirect_uris,
+            \"allowed_origins\": [\"https://auth.tangleweave.local\", \"https://app.tangleweave.local\"],
+            \"enabled\": true,
+            \"flows_enabled\": [\"authorization_code\", \"refresh_token\"],
+            \"access_token_alg\": \"RS256\",
+            \"id_token_alg\": \"RS256\",
+            \"scopes\": $scopes,
+            \"default_scopes\": $scopes,
+            \"challenges\": [\"S256\"]
+        }"
+    
+    echo_success "Client '$client_id' created"
+}
+
+main() {
+    echo "=============================================="
+    echo "  TangleWeave Studios - SSO Auto-Configuration"
+    echo "=============================================="
+    echo ""
+    
+    wait_for_rauthy || exit 1
+    echo ""
+    
+    echo "--- Creating OIDC Clients ---"
+    
+    # Delete existing clients first
+    echo_step "Cleaning up existing clients..."
+    delete_client "unwind-game"
+    delete_client "backoffice-admin"
+    delete_client "backoffice-api"
+    
+    create_client "unwind-game" "Unwind - The Magic Atlas" '["https://app.tangleweave.local/callback", "unwind://auth"]' '["openid", "profile", "email"]'
+    create_client "backoffice-admin" "Tangleweave Backoffice" '["https://app.tangleweave.local/callback", "https://app.tangleweave.local/auth/callback"]' '["openid", "profile", "email", "roles"]'
+    create_client "backoffice-api" "Backoffice API" '[]' '["openid", "profile"]'
+    
+    echo ""
+    echo_success "SSO Configuration Complete!"
+}
+
+main "$@"
+
+# ============================================================================
+# END OF SOURCE CODE
+# ============================================================================

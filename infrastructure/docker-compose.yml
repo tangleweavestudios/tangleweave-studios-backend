@@ -32,14 +32,11 @@ services:
   mailcrab:
     image: marlonb/mailcrab:latest
     restart: unless-stopped
-    ports:
-      # Локально открываем порт 1080. На сервере он будет доступен только через туннель или закрыт.
-      - "${MAILCRAB_PORT:-1080}:1080"
     networks:
       - internal
-    profiles:
-      - dev # Mailcrab будет запускаться только локально или в test, если указать этот профиль
-      - local
+#    profiles:
+#      - dev # Mailcrab будет запускаться только локально или в test, если указать этот профиль
+#      - local
 
   # ==========================================================================
   # RAUTHY (OIDC Provider)
@@ -79,9 +76,12 @@ services:
         exec /nakama/nakama --name tangleweave --database.address nakama:${NAKAMA_DB_PASSWORD}@db:5432/nakama_db --socket.port 7350 --console.port 7351 --runtime.js_entrypoint auth_rauthy.js
     environment:
       - NAKAMA_LICENSE_KEY=${NAKAMA_LICENSE_KEY:-}
-      - RAUTHY_ISSUER=${RAUTHY_ISSUER}
-      - RAUTHY_JWKS_URL=${RAUTHY_JWKS_URL}
+      - RAUTHY_ISSUER=https://auth.${DOMAIN_NAME}
+      - RAUTHY_JWKS_URL=https://auth.${DOMAIN_NAME}/auth/v1/oidc/certs
       - RAUTHY_CLIENT_ID=${RAUTHY_CLIENT_ID}
+      # === ДОБАВЛЯЕМ ДЛЯ ЗАЩИТЫ КОНСОЛИ ===
+      - NAKAMA_CONSOLE_USERNAME=${NAKAMA_ADMIN_LOGIN}
+      - NAKAMA_CONSOLE_PASSWORD=${NAKAMA_ADMIN_PASSWORD}
     volumes:
       - ./nakama/modules:/nakama/data/modules
       - nakama_data:/nakama/storage
@@ -112,7 +112,7 @@ services:
       DATABASE_URL: Server=db;Port=5432;User Id=aptabase;Password=${APTABASE_DB_PASSWORD};Database=aptabase_db
       CLICKHOUSE_URL: Host=aptabase_events_db;Port=8123;Username=tangleweave;Password=${POSTGRES_PASSWORD}
       AUTH_SECRET: ${APABASE_AUTH_SECRET}
-      BASE_URL: ${APTABASE_BASE_URL:-http://localhost:3000}
+      BASE_URL: https://analytics.${DOMAIN_NAME}
     volumes:
       - aptabase_data:/app/data
     networks:
@@ -127,6 +127,7 @@ services:
   # BACKOFFICE API (Rust/Axum)
   # ==========================================================================
   backoffice-api:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-tangleweave}/backoffice-api:latest # <--- ДОБАВИТЬ
     build:
       context: ../
       dockerfile: Dockerfile
@@ -134,8 +135,8 @@ services:
     environment:
       - DATABASE_URL=postgresql://backoffice:${BACKOFFICE_DB_PASSWORD}@db:5432/backoffice_db
       - BACKOFFICE_ADMIN_KEY=${BACKOFFICE_ADMIN_KEY}
-      - OIDC_ISSUER=${OIDC_ISSUER}
-      - JWKS_URL=${JWKS_URL}
+      - OIDC_ISSUER=https://auth.${DOMAIN_NAME}/auth/v1/
+      - JWKS_URL=https://auth.${DOMAIN_NAME}/auth/v1/oidc/certs
       - OIDC_CLIENT_ID=${OIDC_CLIENT_ID}
       - NAKAMA_URL=http://nakama:7350
       - NAKAMA_API_KEY=${NAKAMA_API_KEY}
@@ -151,11 +152,12 @@ services:
   # BACKOFFICE FRONTEND (React SPA)
   # ==========================================================================
   backoffice-frontend:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-tangleweave}/backoffice-frontend:latest # <--- ДОБАВИТЬ
     build:
       context: ../backoffice/frontend
       dockerfile: Dockerfile
       args:
-        - VITE_OIDC_AUTHORITY=${VITE_OIDC_AUTHORITY:-/auth/v1}
+        - VITE_OIDC_AUTHORITY=https://auth.${DOMAIN_NAME}/auth/v1
         - VITE_OIDC_CLIENT_ID=${VITE_OIDC_CLIENT_ID:-backoffice-admin}
     restart: unless-stopped
     networks:
@@ -173,8 +175,12 @@ services:
     networks:
       internal:
         aliases:
-          # Внутренний DNS Docker теперь знает этот домен!
-          - auth.tangleweave.local
+          # Теперь Nginx будет откликаться на правильные домены внутри сети
+          - auth.${DOMAIN_NAME}
+          - app.${DOMAIN_NAME}
+          - mail.${DOMAIN_NAME}
+          - analytics.${DOMAIN_NAME}
+          - console.${DOMAIN_NAME}
     ports:
       # Локально: 80 и 443. На сервере Synology мы отключим биндинг портов,
       # чтобы избежать конфликтов (трафик пойдет через Cloudflare Tunnel)
@@ -192,27 +198,34 @@ services:
   oauth2-proxy:
     image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
     restart: unless-stopped
-    command: --code-challenge-method=S256
+
+    # ПЕРЕНОСИМ ВСЕ URL ПРЯМО В КОМАНДУ (Бронебойный способ)
+    command:
+      - --code-challenge-method=S256
+      - --skip-oidc-discovery=true
+      - --login-url=https://auth.${DOMAIN_NAME}/auth/v1/oidc/authorize
+      - --redeem-url=https://rauthy:8443/auth/v1/oidc/token
+      - --oidc-jwks-url=https://rauthy:8443/auth/v1/oidc/certs
+      - --profile-url=https://rauthy:8443/auth/v1/oidc/userinfo
+
     environment:
       - OAUTH2_PROXY_PROVIDER=oidc
-      - OAUTH2_PROXY_OIDC_ISSUER_URL=${OIDC_ISSUER} # Ссылка на ваш Rauthy
+      - OAUTH2_PROXY_OIDC_ISSUER_URL=https://auth.${DOMAIN_NAME}/auth/v1/
       - OAUTH2_PROXY_CLIENT_ID=${OAUTH2_PROXY_CLIENT_ID:-tangleweave-internal}
       - OAUTH2_PROXY_CLIENT_SECRET=${OAUTH2_PROXY_CLIENT_SECRET}
       - OAUTH2_PROXY_COOKIE_SECRET=${OAUTH2_PROXY_COOKIE_SECRET}
-      # Wildcard куки: залогинившись в mail.*, вы будете авторизованы и в analytics.*
-      - OAUTH2_PROXY_COOKIE_DOMAINS=${OAUTH2_PROXY_COOKIE_DOMAIN}
-      - OAUTH2_PROXY_WHITELIST_DOMAINS=${OAUTH2_PROXY_COOKIE_DOMAIN}
+      - OAUTH2_PROXY_COOKIE_DOMAINS=.${DOMAIN_NAME}
+      - OAUTH2_PROXY_WHITELIST_DOMAINS=.${DOMAIN_NAME}
       - OAUTH2_PROXY_EMAIL_DOMAINS=*
       - OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
-      - OAUTH2_PROXY_UPSTREAMS=file:///dev/null # Роутинг делает Nginx, прокси только проверяет
+      - OAUTH2_PROXY_UPSTREAMS=file:///dev/null
       - OAUTH2_PROXY_SKIP_PROVIDER_BUTTON=true
-      # ДОБАВИТЬ ЭТУ СТРОКУ (Разрешает локальные SSL сертификаты):
       - OAUTH2_PROXY_SSL_INSECURE_SKIP_VERIFY=true
+      - OAUTH2_PROXY_SET_XAUTHREQUEST=true
+      - OAUTH2_PROXY_PASS_USER_HEADERS=true
+      - OAUTH2_PROXY_PASS_BASIC_AUTH=false
     networks:
-        internal:
-          aliases:
-            - auth.tangleweave.local
-            - app.tangleweave.local
+      - internal
     depends_on:
       - rauthy
 
