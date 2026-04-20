@@ -80,6 +80,8 @@ jobs:
           docker compose --env-file .env -p tangleweave-test --profile cloudflare pull
           docker compose --env-file .env -p tangleweave-test --profile cloudflare up -d --remove-orphans
           docker image prune -f
+          
+          docker compose --env-file .env -p tangleweave-test exec -T nginx nginx -s reload
 
   # ==========================================================================
   # 🚀 ТРАССА 2: БОЕВАЯ СРЕДА (main ветка)
@@ -145,3 +147,5 @@ jobs:
           docker compose --env-file .env -p tangleweave-prod --profile cloudflare pull
           docker compose --env-file .env -p tangleweave-prod --profile cloudflare up -d --remove-orphans
           docker image prune -f
+          
+          docker compose --env-file .env -p tangleweave-prod exec -T nginx nginx -s reload
