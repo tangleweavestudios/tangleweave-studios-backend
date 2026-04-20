@@ -127,11 +127,12 @@ services:
   # BACKOFFICE API (Rust/Axum)
   # ==========================================================================
   backoffice-api:
-    image: ghcr.io/leonidagapkin/backoffice-api:${APP_ENV:-local}
+    image: ghcr.io/tangleweavestudios/backoffice-api:${APP_ENV:-local}
+    container_name: backoffice-api
+    restart: always
     build:
       context: ../
       dockerfile: Dockerfile
-    restart: unless-stopped
     environment:
       - DATABASE_URL=postgresql://backoffice:${BACKOFFICE_DB_PASSWORD}@db:5432/backoffice_db
       - BACKOFFICE_ADMIN_KEY=${BACKOFFICE_ADMIN_KEY}
@@ -152,14 +153,15 @@ services:
   # BACKOFFICE FRONTEND (React SPA)
   # ==========================================================================
   backoffice-frontend:
-    image: ghcr.io/leonidagapkin/backoffice-frontend:${APP_ENV:-local}
+    image: ghcr.io/tangleweavestudios/backoffice-frontend:${APP_ENV:-local}
+    container_name: backoffice-frontend
+    restart: unless-stopped
     build:
       context: ../backoffice/frontend
       dockerfile: Dockerfile
       args:
         - VITE_OIDC_AUTHORITY=https://auth.${DOMAIN_NAME}/auth/v1
         - VITE_OIDC_CLIENT_ID=${VITE_OIDC_CLIENT_ID:-backoffice-admin}
-    restart: unless-stopped
     networks:
       - internal
 
