@@ -1,9 +1,20 @@
 // Rauthy OIDC Authentication Module for Nakama
 // Validates OIDC tokens from Rauthy and authenticates users
 
-const RAUTHY_ISSUER = process.env["RAUTHY_ISSUER"] || "https://tangleweave_rauthy:8443";
-const RAUTHY_JWKS_URL = process.env["RAUTHY_JWKS_URL"] || "https://tangleweave_rauthy:8443/auth/v1/oidc/certs";
-const RAUTHY_CLIENT_ID = process.env["RAUTHY_CLIENT_ID"] || "unwind-game";
+// --- ОБЪЯВЛЕНИЯ ТИПОВ ДЛЯ ТАЙПСКРИПТА (Чтобы tsc не ругался) ---
+declare namespace nkruntime {
+  type Context = any;
+  type Logger = any;
+  type NakamaInterface = any;
+  type AuthenticateCustomRequest = any;
+}
+
+// --------------------------------------------------------------
+
+let RAUTHY_ISSUER = "https://rauthy:8443";
+let RAUTHY_JWKS_URL = "https://rauthy:8443/auth/v1/oidc/certs";
+let RAUTHY_USERINFO_URL = "http://rauthy:8080/auth/v1/oidc/userinfo";
+let RAUTHY_CLIENT_ID = "unwind-game";
 const AUTH_TIMEOUT_MS = 5000;
 
 interface RauthyTokenClaims {
@@ -93,40 +104,40 @@ async function fetchJWKS(): Promise<JWKSet> {
 function pemFromRSAComponents(modulus: string, exponent: string): string {
   const modulusBytes = base64UrlDecode(modulus);
   const exponentBytes = base64UrlDecode(exponent);
-  
+
   const sequence: number[] = [];
-  
+
   // RSA modulus
   sequence.push(0x02);
   const modBytes = encodeLengthPrefix(modulusBytes);
   sequence.push(...modBytes, ...modulusBytes);
-  
+
   // RSA exponent  
   sequence.push(0x02);
   const expBytes = encodeLengthPrefix(exponentBytes);
   sequence.push(...expBytes, ...exponentBytes);
-  
+
   // Wrap in BIT STRING
   const bitString: number[] = [0x03, 0x82, 0x01, 0x01, 0x00];
   for (const byte of sequence) {
     bitString.push(byte);
   }
-  
+
   // Wrap in SEQUENCE
   const der: number[] = [0x30, 0x82];
   const derLength = bitString.length;
   der.push((derLength >> 8) & 0xFF, derLength & 0xFF, ...bitString);
-  
+
   // Convert to PEM
   let pem = '-----BEGIN PUBLIC KEY-----\n';
   const base64 = btoa(String.fromCharCode.apply(null, der as number[]))
-    .replace(/-/g, '+').replace(/_/g, '/');
-  
+      .replace(/-/g, '+').replace(/_/g, '/');
+
   for (let i = 0; i < base64.length; i += 64) {
     pem += base64.substring(i, i + 64) + '\n';
   }
   pem += '-----END PUBLIC KEY-----';
-  
+
   return pem;
 }
 
@@ -163,20 +174,21 @@ async function verifyRS256(token: string, jwks: JWKSet): Promise<RauthyTokenClai
   const signature = base64UrlDecode(signatureB64);
   const payload = `${headerB64}.${payloadB64}`;
   const payloadBytes = new TextEncoder().encode(payload);
-  
+
+  // ИСПРАВЛЕНИЕ: Добавляем 'as any', чтобы TypeScript не ругался на типы буферов
   const publicKey = await crypto.subtle.importKey(
-    'spki',
-    base64UrlDecode(key.n!).buffer,
-    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-    false,
-    ['verify']
+      'spki',
+      base64UrlDecode(key.n!) as any,
+      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+      false,
+      ['verify']
   );
 
   const isValid = await crypto.subtle.verify(
-    { name: 'RSASSA-PKCS1-v1_5' },
-    publicKey,
-    signature,
-    payloadBytes
+      { name: 'RSASSA-PKCS1-v1_5' },
+      publicKey,
+      signature as any,
+      payloadBytes as any
   );
 
   if (!isValid) {
@@ -188,19 +200,19 @@ async function verifyRS256(token: string, jwks: JWKSet): Promise<RauthyTokenClai
 
   // Verify claims
   const now = Math.floor(Date.now() / 1000);
-  
+
   if (claims.exp && claims.exp < now) {
     throw new Error('Token expired');
   }
-  
+
   if (claims.iat && claims.iat > now + 60) {
     throw new Error('Token issued in the future');
   }
-  
+
   if (claims.iss !== RAUTHY_ISSUER) {
-    throw new Error(`Invalid issuer: ${claims.iss}`);
+    throw new Error(`Invalid issuer: ${claims.iss} (Expected: ${RAUTHY_ISSUER})`);
   }
-  
+
   // Check audience
   const audience = Array.isArray(claims.aud) ? claims.aud : [claims.aud];
   if (!audience.includes(RAUTHY_CLIENT_ID) && !audience.includes(RAUTHY_ISSUER)) {
@@ -222,24 +234,24 @@ function normalizeUsername(claims: RauthyTokenClaims): string {
 }
 
 async function authenticateWithRauthyToken(
-  logger: nkruntime.Logger,
-  db: nkruntime.NakamaInterface,
-  token: string
+    logger: nkruntime.Logger,
+    db: nkruntime.NakamaInterface,
+    token: string
 ): Promise<{ userId: string; username: string; email?: string }> {
   try {
     // Fetch and cache JWKS
     const jwks = await fetchJWKS();
-    
+
     // Verify token
     const claims = await verifyRS256(token, jwks);
-    
+
     // Generate consistent user ID from subject
     const externalId = `rauthy:${claims.sub}`;
-    
+
     // Look up or create user
     let userId = await findUserByExternalId(db, externalId);
     const username = normalizeUsername(claims);
-    
+
     if (!userId) {
       // Create new user
       const metadata = {
@@ -248,7 +260,7 @@ async function authenticateWithRauthyToken(
         roles: claims.roles || [],
         rauthy_sub: claims.sub,
       };
-      
+
       userId = await db.authenticateCustom(externalId, false);
       if (userId) {
         await db.updateAccount(userId, {
@@ -259,11 +271,11 @@ async function authenticateWithRauthyToken(
         logger.info(`Created new user from Rauthy: ${username} (${userId})`);
       }
     }
-    
+
     if (!userId) {
       throw new Error('Failed to authenticate user');
     }
-    
+
     return {
       userId: userId,
       username: username,
@@ -276,8 +288,8 @@ async function authenticateWithRauthyToken(
 }
 
 async function findUserByExternalId(
-  db: nkruntime.NakamaInterface,
-  externalId: string
+    db: nkruntime.NakamaInterface,
+    externalId: string
 ): Promise<string | null> {
   try {
     const result = await db.users([externalId]);
@@ -292,35 +304,33 @@ async function findUserByExternalId(
 
 // RPC to authenticate with Rauthy OIDC token
 function rpcAuthenticateRauthy(
-  ctx: nkruntime.Context,
-  logger: nkruntime.Logger,
-  db: nkruntime.NakamaInterface,
-  nakama: nkruntime.NakamaModule,
-  payload: string
+    ctx: nkruntime.Context,
+    logger: nkruntime.Logger,
+    nk: nkruntime.NakamaInterface,
+    payload: string
 ): string {
   try {
     const { token } = JSON.parse(payload);
-    
+
     if (!token || typeof token !== 'string') {
-      return JSON.stringify({ 
-        success: false, 
-        error: 'Missing or invalid token' 
+      return JSON.stringify({
+        success: false,
+        error: 'Missing or invalid token'
       });
     }
 
-    // Synchronous wrapper for async function
     let result: { userId: string; username: string; email?: string } | null = null;
     let error: Error | null = null;
 
     // Use setTimeout to run async code synchronously (Nakama runtime limitation)
-    authenticateWithRauthyToken(logger, db, token)
-      .then(res => { result = res; })
-      .catch(err => { error = err; });
+    authenticateWithRauthyToken(logger, nk, token)
+        .then(res => { result = res; })
+        .catch(err => { error = err; });
 
     // For now, return error as Nakama TS runtime is async
     // The client should use this RPC to validate the token server-side
-    return JSON.stringify({ 
-      success: false, 
+    return JSON.stringify({
+      success: false,
       error: 'Use authenticateRauthy() from the client SDK instead',
       instructions: {
         flow: '1. Client obtains OIDC token from Rauthy via PKCE flow',
@@ -334,20 +344,85 @@ function rpcAuthenticateRauthy(
   }
 }
 
+function beforeAuthenticateCustom(
+    ctx: nkruntime.Context,
+    logger: nkruntime.Logger,
+    nk: nkruntime.NakamaInterface,
+    data: nkruntime.AuthenticateCustomRequest
+): nkruntime.AuthenticateCustomRequest {
+
+  // 1. Проверяем, прислал ли клиент токен в переменных (vars)
+  if (!data.account || !data.account.vars || !data.account.vars["rauthy_token"]) {
+    return data; // Если нет, это обычный запрос (например, гостевой), пропускаем дальше
+  }
+
+  const token = data.account.vars["rauthy_token"];
+  const requestedId = data.account.id; // Тот ID, который фронтенд сформировал
+
+  logger.info("Validating token via Rauthy UserInfo endpoint...");
+
+  try {
+    // 2. Отправляем внутренний HTTP-запрос в Rauthy для проверки токена
+    const response = nk.httpRequest(
+        RAUTHY_USERINFO_URL,
+        "GET",
+        {
+          "Authorization": `Bearer ${token}`,
+          "Accept": "application/json"
+        },
+        ""
+    );
+
+    if (response.code !== 200) {
+      logger.error(`Rauthy token validation failed: HTTP ${response.code}`);
+      throw new Error("Invalid OIDC token");
+    }
+
+    const userInfo = JSON.parse(response.body);
+    const expectedId = `rauthy:${userInfo.sub}`; // Ожидаемый ID на основе данных из SSO
+
+    // 3. Строгая проверка безопасности
+    if (requestedId !== expectedId) {
+      logger.error(`ID mismatch. Client requested ${requestedId}, but token belongs to ${expectedId}`);
+      throw new Error("Token does not match requested Custom ID");
+    }
+
+    logger.info(`Successfully verified and authenticated Rauthy user: ${userInfo.sub}`);
+
+    // Всё ок, пропускаем авторизацию! Nakama сама создаст или загрузит аккаунт.
+    return data;
+
+  } catch (error) {
+    logger.error(`Authentication error: ${error}`);
+    // Выбрасываем ошибку, чтобы Nakama отклонила запрос
+    throw new Error("OIDC Authentication Failed");
+  }
+}
+
 // Initialize the module
-function InitModule(ctx: nkruntime.Context, logger: nkruntime.Logger, nakama: nkruntime.NakamaModule): void {
+function InitModule(
+    ctx: nkruntime.Context,
+    logger: nkruntime.Logger,
+    nk: nkruntime.NakamaInterface,
+    initializer: any
+): void {
+  // Читаем переменные из контекста Nakama
+  RAUTHY_ISSUER = ctx.env["RAUTHY_ISSUER"] || RAUTHY_ISSUER;
+  RAUTHY_JWKS_URL = ctx.env["RAUTHY_JWKS_URL"] || RAUTHY_JWKS_URL;
+  RAUTHY_CLIENT_ID = ctx.env["RAUTHY_CLIENT_ID"] || RAUTHY_CLIENT_ID;
+
+  RAUTHY_USERINFO_URL = ctx.env["RAUTHY_USERINFO_URL"] || RAUTHY_USERINFO_URL;
+
   logger.info('Rauthy OIDC authentication module loaded');
   logger.info(`Rauthy Issuer: ${RAUTHY_ISSUER}`);
   logger.info(`Rauthy JWKS: ${RAUTHY_JWKS_URL}`);
   logger.info(`Rauthy Client ID: ${RAUTHY_CLIENT_ID}`);
 
-  // Register RPC endpoints
-  nakama.rpc.register('authenticate_rauthy', (ctx: nkruntime.Context, logger: nkruntime.Logger, db: nkruntime.NakamaInterface, nakama: nkruntime.NakamaModule, payload: string) => {
-    return rpcAuthenticateRauthy(ctx, logger, db, nakama, payload);
-  });
+  // ИСПРАВЛЕНИЕ: Регистрация происходит через объект initializer
+  initializer.registerRpc('authenticate_rauthy', rpcAuthenticateRauthy);
+
+  // Регистрируем наш перехватчик
+  initializer.registerBeforeAuthenticateCustom(beforeAuthenticateCustom);
 
   logger.info('Rauthy authentication RPC registered: authenticate_rauthy');
 }
-
-// Export for proper TypeScript module
-module.exports = InitModule;

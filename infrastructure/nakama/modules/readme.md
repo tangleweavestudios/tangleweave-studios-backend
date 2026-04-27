@@ -1,0 +1,1 @@
+npx -p typescript tsc auth_rauthy.ts

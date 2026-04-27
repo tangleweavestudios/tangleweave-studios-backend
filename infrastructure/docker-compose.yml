@@ -77,7 +77,7 @@ services:
     environment:
       - NAKAMA_LICENSE_KEY=${NAKAMA_LICENSE_KEY:-}
       - RAUTHY_ISSUER=https://auth${DOMAIN_NAME}
-      - RAUTHY_JWKS_URL=https://auth${DOMAIN_NAME}/auth/v1/oidc/certs
+      - RAUTHY_JWKS_URL=https://auth${DOMAIN_NAME}/auth/v1/certs
       - RAUTHY_CLIENT_ID=${RAUTHY_CLIENT_ID}
       # === ДОБАВЛЯЕМ ДЛЯ ЗАЩИТЫ КОНСОЛИ ===
       - NAKAMA_CONSOLE_USERNAME=${NAKAMA_ADMIN_LOGIN}
